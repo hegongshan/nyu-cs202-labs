@@ -82,7 +82,7 @@ main(int argc, char **argv)
 	if ((f = open("mnt/big", O_WRONLY|O_CREAT, 0600)) < 0)
 		panic("creat /big: %s", strerror(errno));
 	memset(buf, 0, sizeof(buf));
-	for (i = 0; i < (N_DIRECT*2)*BLKSIZE; i += sizeof(buf)) {
+	for (i = 0; i < (N_DIRECT*3)*BLKSIZE; i += sizeof(buf)) {
 		*(int*)buf = i;
 		if ((r = write(f, buf, sizeof(buf))) < 0)
 			panic("write /big@%d: %s", i, strerror(errno));
@@ -91,7 +91,7 @@ main(int argc, char **argv)
 
 	if ((f = open("mnt/big", O_RDONLY)) < 0)
 		panic("open /big: %s", strerror(errno));
-	for (i = 0; i < (N_DIRECT*2)*BLKSIZE; i += sizeof(buf)) {
+	for (i = 0; i < (N_DIRECT*3)*BLKSIZE; i += sizeof(buf)) {
 		*(int*)buf = i;
 		if ((r = read(f, buf, sizeof(buf))) < 0)
 			panic("read /big@%d: %s", i, strerror(errno));
