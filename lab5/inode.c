@@ -37,7 +37,81 @@ int
 inode_block_walk(struct inode *ino, uint32_t filebno, uint32_t **ppdiskbno, bool alloc)
 {
 	// LAB: Your code here.
-	panic("inode_block_walk not implemented");
+	// panic("inode_block_walk not implemented");
+	int r;
+	uint32_t *pdoublebno;
+
+	assert(filebno >= 0);
+	// 1.If filebno is a direct block
+	if (filebno < N_DIRECT) {
+		if (ino->i_direct[filebno]) {
+			*ppdiskbno = ino->i_direct + filebno;
+			return 0;
+		}
+		if (!alloc) {
+			return -ENOENT;
+		}
+		if ((r = alloc_block()) < 0) {
+			return r;
+		}	
+		ino->i_direct[filebno] = r;
+		*ppdiskbno = ino->i_direct + filebno;
+		return 0;
+	}
+	// 2.If filebno is an indirect block
+	filebno -= N_DIRECT;
+	if (filebno < N_INDIRECT) {
+		if (ino->i_indirect) {
+			*ppdiskbno = (uint32_t *)diskaddr(ino->i_indirect) + filebno;
+			return 0;
+		}
+		if (!alloc) {
+			return -ENOENT;
+		}
+		if ((r = alloc_block()) < 0) {
+			return r;
+		}
+		ino->i_indirect = r;
+		*ppdiskbno = (uint32_t *)diskaddr(ino->i_indirect) + filebno;
+		return 0;
+	}
+	// 3.If filebno is a double-indirect block
+	filebno -= N_INDIRECT;
+	if (filebno < N_DOUBLE) {
+		int bucket = filebno / N_INDIRECT;
+		int offset = filebno % N_INDIRECT;
+		if (ino->i_double) {
+			pdoublebno = (uint32_t *)diskaddr(ino->i_double) + bucket;
+			if (*pdoublebno == 0) {
+				if (!alloc) {
+					return -ENOENT;
+				}
+				if ((r = alloc_block()) < 0) {
+					return r;
+				}
+				*pdoublebno = r;
+			}
+			*ppdiskbno = (uint32_t *)diskaddr(*pdoublebno) + offset;
+			return 0;
+		}
+		if (!alloc) {
+			return -ENOENT;
+		}
+		// allocate a double-indirect block
+		if ((r = alloc_block()) < 0) {
+			return r;
+		}
+		ino->i_double = r;
+		pdoublebno = (uint32_t *)diskaddr(ino->i_double) + bucket;
+		// allocate an indirect block in the double-indirect block
+		if ((r = alloc_block()) < 0) {
+			return r;		
+		}
+		*pdoublebno = r;
+		*ppdiskbno = (uint32_t *)diskaddr(*pdoublebno) + offset;
+		return 0;
+	}
+	return -EINVAL;
 }
 
 // Set *blk to the address in memory where the filebno'th block of
@@ -53,7 +127,25 @@ int
 inode_get_block(struct inode *ino, uint32_t filebno, char **blk)
 {
 	// LAB: Your code here.
-	panic("inode_get_block not implemented");
+	// panic("inode_get_block not implemented");
+	int r;
+	uint32_t *pdiskbno;
+
+	// allocate an indirect block
+	if ((r = inode_block_walk(ino, filebno, &pdiskbno, 1)) < 0) {
+		return r;
+	}
+	if (*pdiskbno) {
+		*blk = diskaddr(*pdiskbno);
+		return 0;
+	}
+	// allocate the block if it doesn't yet exist
+	if ((r = alloc_block()) < 0) {
+		return r;
+	}
+	*pdiskbno = r;
+	*blk = diskaddr(*pdiskbno);
+	return 0;
 }
 
 // Create "path".  On success set *pino to point at the inode and return 0.
@@ -204,9 +296,34 @@ inode_truncate_blocks(struct inode *ino, uint32_t newsize)
 {
 	int r;
 	uint32_t bno, old_nblocks, new_nblocks;
+	uint32_t *pdiskbno;
 
 	// LAB: Your code here.
-	panic("inode_truncate_blocks not implemented");
+	// panic("inode_truncate_blocks not implemented");
+	old_nblocks = ROUNDUP(ino->i_size, BLKSIZE) / BLKSIZE;
+	new_nblocks = ROUNDUP(newsize, BLKSIZE) / BLKSIZE;
+	// old_nblocks = (ino->i_size + BLKSIZE - 1) / BLKSIZE;
+	// new_nblocks = (newsize + BLKSIZE - 1) / BLKSIZE;
+	for (bno = new_nblocks; bno < old_nblocks; bno++) {
+		if ((r = inode_free_block(ino, bno)) < 0) {
+			return ;
+		}
+	}
+	if (new_nblocks <= N_DIRECT && ino->i_indirect) {
+		free_block(ino->i_indirect);
+		ino->i_indirect = 0;
+	}
+	if (new_nblocks <= N_DIRECT + N_INDIRECT && ino->i_double) {
+		pdiskbno = diskaddr(ino->i_double);
+		for (bno = 0; bno < N_INDIRECT; bno++) {
+			if (pdiskbno[bno]) {
+				free_block(pdiskbno[bno]);
+				pdiskbno[bno] = 0;
+			}
+		}
+		free_block(ino->i_double);
+		ino->i_double = 0;
+	}
 }
 
 // Set the size of inode ino, truncating or extending as necessary.
@@ -282,7 +399,21 @@ int
 inode_unlink(const char *path)
 {
 	// LAB: Your code here.
-	panic("inode_unlink not implemented");
+	// panic("inode_unlink not implemented");
+	int r;
+	struct inode *pino;
+	struct dirent *pent;
+	
+	if ((r = walk_path(path, NULL, &pino, &pent, NULL)) < 0) {
+		return -ENOENT;
+	}
+	pent->d_name[0] = '\0';
+	pent->d_inum = 0;
+	pino->i_nlink--;
+	if (pino->i_nlink == 0) {
+		inode_free(pent->d_inum);
+	}
+	return 0;
 }
 
 // Link the inode at the location srcpath to the new location dstpath.
@@ -296,7 +427,27 @@ int
 inode_link(const char *srcpath, const char *dstpath)
 {
 	// LAB: Your code here.
-	panic("inode_link not implemented");
+	// panic("inode_link not implemented");
+	char name[NAME_MAX];
+	int r;
+	struct inode *pino, *dst_dir;
+	struct dirent *src_ent, *dst_ent;
+
+	if ((r = walk_path(dstpath, &dst_dir, NULL, NULL, name)) == 0) {
+		return -EEXIST;
+	}
+	if ((r = walk_path(srcpath, NULL, &pino, &src_ent, NULL)) < 0) {
+		return r;
+	}
+	if ((r = dir_alloc_dirent(dst_dir, &dst_ent)) < 0) {
+		return r;
+	}
+	
+	dst_ent->d_inum = src_ent->d_inum;
+	memmove(dst_ent->d_name, name, strlen(name));
+	pino->i_nlink++;
+	
+	return 0;
 }
 
 // Return information about the specified inode.

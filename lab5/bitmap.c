@@ -46,6 +46,20 @@ alloc_block(void)
 	// super->s_nblocks blocks in the disk altogether.
 
 	// LAB: Your code here.
-	panic("alloc_block not implemented");
-	return -ENOSPC;
+	// panic("alloc_block not implemented");
+	int blockno;
+    	int bucket;
+    	int mask;
+	int start_data_blkno = (super->s_nblocks + BLKBITSIZE - 1) / BLKBITSIZE + 1;
+
+    	for (blockno = start_data_blkno; blockno < super->s_nblocks; blockno++) {
+        	bucket = blockno / 32;
+       		mask = 1 << (blockno % 32);
+        	if (block_is_free(blockno)) {
+            		bitmap[bucket] &= ~mask;
+            		flush_block(&bitmap[bucket]);
+            		return blockno;
+        	}
+    	}
+    	return -ENOSPC;
 }
