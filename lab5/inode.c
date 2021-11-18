@@ -323,6 +323,16 @@ inode_truncate_blocks(struct inode *ino, uint32_t newsize)
 		}
 		free_block(ino->i_double);
 		ino->i_double = 0;
+		return;
+	}
+	if (ino->i_double && (new_nblocks -= N_DIRECT + N_INDIRECT) > 0) {
+		pdiskbno = diskaddr(ino->i_double);
+		for (bno = new_nblocks / N_INDIRECT + 1; bno < N_INDIRECT; bno++) {
+			if (pdiskbno[bno]) {
+				free_block(pdiskbno[bno]);
+				pdiskbno[bno] = 0;
+			}
+		}
 	}
 }
 
@@ -400,14 +410,16 @@ inode_unlink(const char *path)
 {
 	// LAB: Your code here.
 	// panic("inode_unlink not implemented");
-	int r;
+	int r, cnt;
 	struct inode *pino;
 	struct dirent *pent;
 	
 	if ((r = walk_path(path, NULL, &pino, &pent, NULL)) < 0) {
 		return -ENOENT;
 	}
-	pent->d_name[0] = '\0';
+	for (cnt = 0; cnt < NAME_MAX && pent->d_name[cnt] != '\0'; cnt++) {
+		pent->d_name[cnt] = '\0';
+	}
 	pent->d_inum = 0;
 	pino->i_nlink--;
 	if (pino->i_nlink == 0) {

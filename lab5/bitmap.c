@@ -50,7 +50,8 @@ alloc_block(void)
 	int blockno;
     	int bucket;
     	int mask;
-	int start_data_blkno = (super->s_nblocks + BLKBITSIZE - 1) / BLKBITSIZE + 1;
+	int base = BLKBITSIZE + 1;
+	int start_data_blkno = (super->s_nblocks - 2 + base) / base;
 
     	for (blockno = start_data_blkno; blockno < super->s_nblocks; blockno++) {
         	bucket = blockno / 32;
