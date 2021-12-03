@@ -50,12 +50,11 @@ alloc_block(void)
 	int blockno;
     	int bucket;
     	int mask;
-	int base = BLKBITSIZE + 1;
-	int start_data_blkno = (super->s_nblocks - 2 + base) / base;
+	int start_data_blkno = (super->s_nblocks + BLKSIZE - 1) / BLKSIZE + 1;
 
     	for (blockno = start_data_blkno; blockno < super->s_nblocks; blockno++) {
         	bucket = blockno / 32;
-       		mask = 1 << (blockno % 32);
+       	mask = 1 << (blockno % 32);
         	if (block_is_free(blockno)) {
             		bitmap[bucket] &= ~mask;
             		flush_block(&bitmap[bucket]);
