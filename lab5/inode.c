@@ -10,6 +10,21 @@
 #include "dir.h"
 
 
+int
+alloc_and_clear_block(bool alloc, uint32_t *blk) {
+	int r;
+
+	if (!alloc) {
+		return -ENOENT;
+	}
+	if ((r = alloc_block()) < 0) {
+		return r;
+	}
+	memset(diskaddr(r), 0, BLKSIZE);
+	*blk = r;
+	return 0;
+}
+
 // Find the disk block number slot for the 'filebno'th block in inode 'ino'.
 // Set '*ppdiskbno' to point to that slot.  The slot will be one of the
 // ino->i_direct[] entries, an entry in the indirect block, or an entry
@@ -44,18 +59,6 @@ inode_block_walk(struct inode *ino, uint32_t filebno, uint32_t **ppdiskbno, bool
 	assert(filebno >= 0);
 	// 1.If filebno is a direct block
 	if (filebno < N_DIRECT) {
-		if (ino->i_direct[filebno]) {
-			*ppdiskbno = ino->i_direct + filebno;
-			return 0;
-		}
-		if (!alloc) {
-			return -ENOENT;
-		}
-		if ((r = alloc_block()) < 0) {
-			return r;
-		}	
-		memset(diskaddr(r), 0, BLKSIZE);
-		ino->i_direct[filebno] = r;
 		*ppdiskbno = ino->i_direct + filebno;
 		return 0;
 	}
@@ -66,14 +69,9 @@ inode_block_walk(struct inode *ino, uint32_t filebno, uint32_t **ppdiskbno, bool
 			*ppdiskbno = (uint32_t *)diskaddr(ino->i_indirect) + filebno;
 			return 0;
 		}
-		if (!alloc) {
-			return -ENOENT;
-		}
-		if ((r = alloc_block()) < 0) {
+		if ((r = alloc_and_clear_block(alloc, &ino->i_indirect)) < 0) {
 			return r;
 		}
-		memset(diskaddr(r), 0, BLKSIZE);
-		ino->i_indirect = r;
 		*ppdiskbno = (uint32_t *)diskaddr(ino->i_indirect) + filebno;
 		return 0;
 	}
@@ -85,34 +83,22 @@ inode_block_walk(struct inode *ino, uint32_t filebno, uint32_t **ppdiskbno, bool
 		if (ino->i_double) {
 			pdoublebno = (uint32_t *)diskaddr(ino->i_double) + bucket;
 			if (*pdoublebno == 0) {
-				if (!alloc) {
-					return -ENOENT;
-				}
-				if ((r = alloc_block()) < 0) {
+				if ((r = alloc_and_clear_block(alloc, pdoublebno)) < 0) {
 					return r;
 				}
-				memset(diskaddr(r), 0, BLKSIZE);
-				*pdoublebno = r;
 			}
 			*ppdiskbno = (uint32_t *)diskaddr(*pdoublebno) + offset;
 			return 0;
 		}
-		if (!alloc) {
-			return -ENOENT;
-		}
-		// allocate a double-indirect block
-		if ((r = alloc_block()) < 0) {
+
+		if ((r = alloc_and_clear_block(alloc, &ino->i_double)) < 0) {
 			return r;
 		}
-		memset(diskaddr(r), 0, BLKSIZE);
-		ino->i_double = r;
 		pdoublebno = (uint32_t *)diskaddr(ino->i_double) + bucket;
 		// allocate an indirect block in the double-indirect block
-		if ((r = alloc_block()) < 0) {
-			return r;		
+		if ((r = alloc_and_clear_block(alloc, pdoublebno)) < 0) {
+			return r;
 		}
-		memset(diskaddr(r), 0, BLKSIZE);
-		*pdoublebno = r;
 		*ppdiskbno = (uint32_t *)diskaddr(*pdoublebno) + offset;
 		return 0;
 	}
@@ -137,7 +123,7 @@ inode_get_block(struct inode *ino, uint32_t filebno, char **blk)
 	uint32_t *pdiskbno;
 
 	// allocate an indirect block
-	if ((r = inode_block_walk(ino, filebno, &pdiskbno, 1)) < 0) {
+	if ((r = inode_block_walk(ino, filebno, &pdiskbno, true)) < 0) {
 		return r;
 	}
 	if (*pdiskbno) {
@@ -145,11 +131,9 @@ inode_get_block(struct inode *ino, uint32_t filebno, char **blk)
 		return 0;
 	}
 	// allocate the block if it doesn't yet exist
-	if ((r = alloc_block()) < 0) {
+	if ((r = alloc_and_clear_block(true, pdiskbno)) < 0) {
 		return r;
 	}
-	memset(diskaddr(r), 0, BLKSIZE);
-	*pdiskbno = r;
 	*blk = diskaddr(*pdiskbno);
 	return 0;
 }
@@ -320,6 +304,7 @@ inode_truncate_blocks(struct inode *ino, uint32_t newsize)
 		if (!ino->i_indirect) {
 			return;
 		}
+
 		free_block(ino->i_indirect);
 		ino->i_indirect = 0;
 	}
@@ -424,20 +409,26 @@ inode_unlink(const char *path)
 {
 	// LAB: Your code here.
 	// panic("inode_unlink not implemented");
-	int r, cnt;
+	int cnt;
 	struct inode *pino;
-	struct dirent *pent;
+	struct dirent *pdent;
 	
-	if ((r = walk_path(path, NULL, &pino, &pent, NULL)) < 0) {
+	if (walk_path(path, NULL, &pino, &pdent, NULL) < 0) {
 		return -ENOENT;
 	}
-	for (cnt = 0; cnt < NAME_MAX && pent->d_name[cnt] != '\0'; cnt++) {
-		pent->d_name[cnt] = '\0';
-	}
-	pent->d_inum = 0;
+	// decrement its link count
 	pino->i_nlink--;
+	
+	// zero the name and inum fields
+	for (cnt = 0; cnt < NAME_MAX && pdent->d_name[cnt] != '\0'; cnt++) {
+		pdent->d_name[cnt] = '\0';
+	}
+	cnt = pdent->d_inum;
+	pdent->d_inum = 0;
+	
+	// free the inode
 	if (pino->i_nlink == 0) {
-		inode_free(pent->d_inum);
+		inode_free(cnt);
 	}
 	return 0;
 }
