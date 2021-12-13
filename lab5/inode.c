@@ -10,8 +10,9 @@
 #include "dir.h"
 
 
+// When 'alloc' is set, this function will allocate a block and then clear it.
 int
-alloc_and_clear_block(bool alloc, uint32_t *blk) {
+alloc_and_clear_block(bool alloc) {
 	int r;
 
 	if (!alloc) {
@@ -21,8 +22,7 @@ alloc_and_clear_block(bool alloc, uint32_t *blk) {
 		return r;
 	}
 	memset(diskaddr(r), 0, BLKSIZE);
-	*blk = r;
-	return 0;
+	return r;
 }
 
 // Find the disk block number slot for the 'filebno'th block in inode 'ino'.
@@ -53,8 +53,8 @@ inode_block_walk(struct inode *ino, uint32_t filebno, uint32_t **ppdiskbno, bool
 {
 	// LAB: Your code here.
 	// panic("inode_block_walk not implemented");
-	int r;
-	uint32_t *pdoublebno;
+	int r, bucket, offset;
+	uint32_t *pindirect;
 
 	assert(filebno >= 0);
 	// 1.If filebno is a direct block
@@ -69,37 +69,40 @@ inode_block_walk(struct inode *ino, uint32_t filebno, uint32_t **ppdiskbno, bool
 			*ppdiskbno = (uint32_t *)diskaddr(ino->i_indirect) + filebno;
 			return 0;
 		}
-		if ((r = alloc_and_clear_block(alloc, &ino->i_indirect)) < 0) {
+		if ((r = alloc_and_clear_block(alloc)) < 0) {
 			return r;
 		}
+		ino->i_indirect = r;
 		*ppdiskbno = (uint32_t *)diskaddr(ino->i_indirect) + filebno;
 		return 0;
 	}
 	// 3.If filebno is a double-indirect block
 	filebno -= N_INDIRECT;
 	if (filebno < N_DOUBLE) {
-		int bucket = filebno / N_INDIRECT;
-		int offset = filebno % N_INDIRECT;
+		bucket = filebno / N_INDIRECT;
+		offset = filebno % N_INDIRECT;
 		if (ino->i_double) {
-			pdoublebno = (uint32_t *)diskaddr(ino->i_double) + bucket;
-			if (*pdoublebno == 0) {
-				if ((r = alloc_and_clear_block(alloc, pdoublebno)) < 0) {
-					return r;
-				}
+			pindirect = (uint32_t *)diskaddr(ino->i_double) + bucket;
+			if (*pindirect == 0 && (r = alloc_and_clear_block(alloc)) < 0) { 
+				return r;
 			}
-			*ppdiskbno = (uint32_t *)diskaddr(*pdoublebno) + offset;
+			*ppdiskbno = (uint32_t *)diskaddr(*pindirect) + offset;
 			return 0;
 		}
 
-		if ((r = alloc_and_clear_block(alloc, &ino->i_double)) < 0) {
+		// allocate a double-indirect block
+		if ((r = alloc_and_clear_block(alloc)) < 0) {
 			return r;
 		}
-		pdoublebno = (uint32_t *)diskaddr(ino->i_double) + bucket;
+		ino->i_double = r;
+		
+		pindirect = (uint32_t *)diskaddr(ino->i_double) + bucket;
 		// allocate an indirect block in the double-indirect block
-		if ((r = alloc_and_clear_block(alloc, pdoublebno)) < 0) {
+		if ((r = alloc_and_clear_block(alloc)) < 0) {
 			return r;
 		}
-		*ppdiskbno = (uint32_t *)diskaddr(*pdoublebno) + offset;
+		*pindirect = r;
+		*ppdiskbno = (uint32_t *)diskaddr(*pindirect) + offset;
 		return 0;
 	}
 	return -EINVAL;
@@ -131,9 +134,10 @@ inode_get_block(struct inode *ino, uint32_t filebno, char **blk)
 		return 0;
 	}
 	// allocate the block if it doesn't yet exist
-	if ((r = alloc_and_clear_block(true, pdiskbno)) < 0) {
+	if ((r = alloc_and_clear_block(true)) < 0) {
 		return r;
 	}
+	*pdiskbno = r;
 	*blk = diskaddr(*pdiskbno);
 	return 0;
 }
