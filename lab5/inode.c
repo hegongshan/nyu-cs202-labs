@@ -83,8 +83,11 @@ inode_block_walk(struct inode *ino, uint32_t filebno, uint32_t **ppdiskbno, bool
 		offset = filebno % N_INDIRECT;
 		if (ino->i_double) {
 			pindirect = (uint32_t *)diskaddr(ino->i_double) + bucket;
-			if (*pindirect == 0 && (r = alloc_and_clear_block(alloc)) < 0) { 
-				return r;
+			if (*pindirect == 0) {
+				if ((r = alloc_and_clear_block(alloc)) < 0) { 
+					return r;
+				}
+				*pindirect = r;
 			}
 			*ppdiskbno = (uint32_t *)diskaddr(*pindirect) + offset;
 			return 0;
