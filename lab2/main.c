@@ -114,8 +114,9 @@ static void help() {
     /* TODO: add to this */
     printf("ls: List files\n");
     printf("\t--help: Print this help\n");
-    printf("\t-l: Long format\n");
-    printf("\t-R: recursive\n");
+    printf("\t-l: Use a long listing format\n");
+    printf("\t-R: List subdirectories recursively\n");
+    printf("\t-h: With -l, print sizes like 1K 234M 2G etc\n");
     exit(0);
 }
 
@@ -129,7 +130,18 @@ void handle_error(char* what_happened, char* fullname) {
     PRINT_ERROR("ls", what_happened, fullname);
 
     // TODO: your code here: inspect errno and set err_code accordingly.
-    err_code = -errno;
+    // If there was any error
+    if (err_code == 0) {
+        err_code = 1 << 6;
+    }
+    switch (errno) {
+    	case ENOENT: // if a file specified in the command-line was not found
+		err_code |= 1 << 3;
+		break;
+	case EPERM: // if program was denied access to a file or directory
+		err_code |= 1 << 4;
+		break;
+    }
     return;
 }
 
@@ -174,18 +186,18 @@ const char* ftype_to_str(mode_t mode) {
     if (S_ISLNK(mode)) {
         return "l";
     }
-    /*if (S_ISCHR(mode)) {
+    if (S_ISCHR(mode)) {
         return "c";
     }
     if (S_ISBLK(mode)) {
         return  "b";
     }
     if (S_ISFIFO(mode)) {
-        return "f";
+        return "p";
     }
     if (S_ISSOCK(mode)) {
         return "s";
-    }*/
+    }
     return "?";
 }
 
@@ -207,7 +219,7 @@ void list_file(char* pathandname, char* name, bool list_long, bool human_readabl
     /* TODO: fill in*/
     if (!list_long) {
         printf("%s", name);
-        if (is_dir(pathandname) && strcmp(name, ".") && strcmp(name, "..")) {
+        if (is_dir(pathandname) && strcmp(name, ".") != 0 && strcmp(name, "..") != 0) {
             putchar('/');
         }
         putchar('\n');
@@ -216,6 +228,7 @@ void list_file(char* pathandname, char* name, bool list_long, bool human_readabl
 
     struct stat sb;
     // Don't use stat function
+    // lstat: If FILE is a symbolic link, do not follow it.
     if (lstat(pathandname, &sb)) {
         handle_error("cannot access", pathandname);
         return;
@@ -232,22 +245,37 @@ void list_file(char* pathandname, char* name, bool list_long, bool human_readabl
     PRINT_PERM_CHAR(sb.st_mode, S_IROTH, "r");
     PRINT_PERM_CHAR(sb.st_mode, S_IWOTH, "w");
     PRINT_PERM_CHAR(sb.st_mode, S_IXOTH, "x");
-    putchar(' ');
+    //putchar(' ');
+    printf(". ");
 
     // 2.number of links, 
     printf("%lu ", sb.st_nlink);
 
-    // 3.owner name and group name
+    // 3.owner name
     char uname[255];
-    char group[255];
-    uname_for_uid(sb.st_uid, uname, sizeof(uname));
-    group_for_gid(sb.st_gid, group, sizeof(group));
-    printf("%s %s ",uname, group);
+    if (uname_for_uid(sb.st_uid, uname, sizeof(uname))) {
+	err_code |= 1 << 6;
+	err_code |= 1 << 5;
+	printf("%d ", sb.st_uid);
+    } else {
+    	printf("%s ", uname);
+    }
 
-    // 4.file size
+    // 4.group name
+    char group[255];
+    if (group_for_gid(sb.st_gid, group, sizeof(group))) {
+	err_code |= 1 << 6;
+	err_code |= 1 << 5;
+        printf("%d ", sb.st_gid);
+    } else {
+        printf("%s ", group);
+    }
+
+    // 5.file size
     if (human_readable) {
+        float d = 1024.0;
         char unit[] = {'K', 'M', 'G'};
-        float base[] = {1024.0, 1024.0 * 1024, 1024.0 * 1024 * 1024};
+	float base[] = {d, d * d, d * d * d};
         int i = sizeof(base) / sizeof(float) - 1;
         while (i >= 0 && base[i] > sb.st_size) {
             i--;
@@ -261,18 +289,18 @@ void list_file(char* pathandname, char* name, bool list_long, bool human_readabl
         printf("%ld ", sb.st_size);
     }
 
-    // 5.modify time
+    // 6.modify time
     char date_str[255];
     date_string(&sb.st_mtim, date_str, sizeof(date_str));
     printf("%s ", date_str);
 
-    // 6.pathname
+    // 7.pathname
     printf("%s", name);
-    if (is_dir(pathandname)) {
+    if (is_dir(pathandname) && strcmp(name, ".") != 0 && strcmp(name, "..") != 0) {
         putchar('/');
     }
 
-    // handle symbolic link
+    // 8.handle symbolic link
     if (S_ISLNK(sb.st_mode)) {
         char link[MAXPATHLEN];
         if (readlink(pathandname, link, sizeof(link)) == -1) {
@@ -306,29 +334,40 @@ void list_dir(char* dirname, bool list_long, bool list_all, bool recursive, bool
      *       closedir()
      *   See the lab description for further hints
      */
-    DIR *dirp = opendir(dirname);
-    
     struct dirent *dent;
-    while((dent = readdir(dirp))) {
+    char pathandname[MAXPATHLEN];
 
+    DIR *dirp = opendir(dirname);
+    while((dent = readdir(dirp))) {
         // ignore the dot files if list_all is false
         if (!list_all && dent->d_name[0] == '.') {
             continue;
         }
 
         const int len = strlen(dirname) + 1 + strlen(dent->d_name) + 1;
-        char pathandname[len]; 
-
         snprintf(pathandname, len, "%s/%s", dirname, dent->d_name);
         list_file(pathandname, dent->d_name, list_long, human_readable);
-
-        // list sub-directories
-        if (is_dir(pathandname) && recursive) {
-            list_dir(pathandname, list_long, list_all, recursive, human_readable);
-        }
+    }
+    closedir(dirp);
+    
+    if (!recursive) {
+        return ;
     }
 
-    closedir(dirp);
+    DIR *dirp2 = opendir(dirname);
+    while((dent = readdir(dirp2))) {
+        const int len = strlen(dirname) + 1 + strlen(dent->d_name) + 1;
+        snprintf(pathandname, len, "%s/%s", dirname, dent->d_name);
+        // ignore the dot files
+        if (!is_dir(pathandname) || strcmp(dent->d_name, ".") == 0 || strcmp(dent->d_name, "..") == 0 || (!list_all && dent->d_name[0] == '.')) {
+            continue;
+        }
+        
+	// list sub-directories
+        printf("\n%s:\n", pathandname);
+        list_dir(pathandname, list_long, list_all, recursive, human_readable);
+    }
+    closedir(dirp2);
 }
 
 int main(int argc, char* argv[]) {
@@ -394,10 +433,28 @@ int main(int argc, char* argv[]) {
     NOT_YET_IMPLEMENTED("Listing files");*/
     if (optind == argc) {
         list_dir(".", list_long, list_all, recursive, human_readable);
-    } else {
-        for (int i = optind; i < argc; i++) {
-            list_dir(argv[i], list_long, list_all, recursive, human_readable);
+        exit(err_code);
+    }
+
+    if (optind == argc - 1) {
+    	if (test_file(argv[optind])) {
+	    if (recursive) {
+		printf("%s:\n", argv[optind]);
+            }
+	    list_dir(argv[optind], list_long, list_all, recursive, human_readable);
+	}
+	exit(err_code);
+    }
+
+    for (int i = optind; i < argc; i++) {
+        if (!test_file(argv[i])) {
+            continue;
         }
+	if (i != optind) {
+	    putchar('\n');
+	}
+        printf("%s:\n", argv[i]);
+        list_dir(argv[i], list_long, list_all, recursive, human_readable);
     }
     exit(err_code);
 }
