@@ -13,6 +13,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <sys/param.h>
 
 static int err_code;
 
@@ -170,6 +171,9 @@ const char* ftype_to_str(mode_t mode) {
     if (S_ISDIR(mode)) {
         return "d";
     }
+    if (S_ISLNK(mode)) {
+        return "l";
+    }
     /*if (S_ISCHR(mode)) {
         return "c";
     }
@@ -178,9 +182,6 @@ const char* ftype_to_str(mode_t mode) {
     }
     if (S_ISFIFO(mode)) {
         return "f";
-    }
-    if (S_ISLNK(mode)) {
-        return "l";
     }
     if (S_ISSOCK(mode)) {
         return "s";
@@ -214,12 +215,13 @@ void list_file(char* pathandname, char* name, bool list_long, bool human_readabl
     }
 
     struct stat sb;
-    if (stat(pathandname, &sb)) {
+    // Don't use stat function
+    if (lstat(pathandname, &sb)) {
         handle_error("cannot access", pathandname);
         return;
     }
 
-    // print the mode
+    // 1.file mode
     printf("%s", ftype_to_str(sb.st_mode));
     PRINT_PERM_CHAR(sb.st_mode, S_IRUSR, "r");
     PRINT_PERM_CHAR(sb.st_mode, S_IWUSR, "w");
@@ -232,38 +234,56 @@ void list_file(char* pathandname, char* name, bool list_long, bool human_readabl
     PRINT_PERM_CHAR(sb.st_mode, S_IXOTH, "x");
     putchar(' ');
 
+    // 2.number of links, 
+    printf("%lu ", sb.st_nlink);
+
+    // 3.owner name and group name
     char uname[255];
     char group[255];
     uname_for_uid(sb.st_uid, uname, sizeof(uname));
     group_for_gid(sb.st_gid, group, sizeof(group));
-    printf("%ld %s %s ", sb.st_nlink, uname, group);
+    printf("%s %s ",uname, group);
 
-    // file size
+    // 4.file size
     if (human_readable) {
         char unit[] = {'K', 'M', 'G'};
         float base[] = {1024.0, 1024.0 * 1024, 1024.0 * 1024 * 1024};
         int i = sizeof(base) / sizeof(float) - 1;
-        while (base[i] > sb.st_size) {
+        while (i >= 0 && base[i] > sb.st_size) {
             i--;
         }
         if (i < 0) {
-            printf("%5ld ", sb.st_size);
+            printf("%7ld ", sb.st_size);
         } else {
-            printf("%4.1f%c ", sb.st_size / base[i], unit[i]);
+            printf("%6.1f%c ", sb.st_size / base[i], unit[i]);
         }
     } else {
-        printf("%5ld ", sb.st_size);
+        printf("%ld ", sb.st_size);
     }
 
+    // 5.modify time
     char date_str[255];
     date_string(&sb.st_mtim, date_str, sizeof(date_str));
     printf("%s ", date_str);
 
+    // 6.pathname
+    printf("%s", name);
     if (is_dir(pathandname)) {
-        printf("%s/\n", name);
-    } else {
-        printf("%s\n", name);
+        putchar('/');
     }
+
+    // handle symbolic link
+    if (S_ISLNK(sb.st_mode)) {
+        char link[MAXPATHLEN];
+        if (readlink(pathandname, link, sizeof(link)) == -1) {
+            handle_error("cannot handle", pathandname);
+        }
+        printf(" -> %s", link);
+        if (is_dir(pathandname)) {
+            putchar('/');
+        }
+    }
+    putchar('\n');
 }
 
 /* list_dir():
