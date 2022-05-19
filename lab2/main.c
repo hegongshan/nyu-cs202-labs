@@ -131,9 +131,7 @@ void handle_error(char* what_happened, char* fullname) {
 
     // TODO: your code here: inspect errno and set err_code accordingly.
     // If there was any error
-    if (err_code == 0) {
-        err_code = 1 << 6;
-    }
+    err_code |= 1 << 6;
     switch (errno) {
     	case ENOENT: // if a file specified in the command-line was not found
 		err_code |= 1 << 3;
@@ -245,8 +243,7 @@ void list_file(char* pathandname, char* name, bool list_long, bool human_readabl
     PRINT_PERM_CHAR(sb.st_mode, S_IROTH, "r");
     PRINT_PERM_CHAR(sb.st_mode, S_IWOTH, "w");
     PRINT_PERM_CHAR(sb.st_mode, S_IXOTH, "x");
-    //putchar(' ');
-    printf(". ");
+    putchar(' ');
 
     // 2.number of links, 
     printf("%lu ", sb.st_nlink);
