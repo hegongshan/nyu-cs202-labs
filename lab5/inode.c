@@ -292,7 +292,7 @@ static void
 inode_truncate_blocks(struct inode *ino, uint32_t newsize)
 {
 	int r;
-	uint32_t bno, old_nblocks, new_nblocks;
+	uint32_t bno, old_nblocks, new_nblocks, double_indirect_bno;
 	uint32_t *pdiskbno;
 
 	// LAB: Your code here.
@@ -301,6 +301,9 @@ inode_truncate_blocks(struct inode *ino, uint32_t newsize)
 	new_nblocks = ROUNDUP(newsize, BLKSIZE) / BLKSIZE;
 	// old_nblocks = (ino->i_size + BLKSIZE - 1) / BLKSIZE;
 	// new_nblocks = (newsize + BLKSIZE - 1) / BLKSIZE;
+
+	// Solution 1: from front to back
+	/* 
 	for (bno = new_nblocks; bno < old_nblocks; bno++) {
 		if ((r = inode_free_block(ino, bno)) < 0) {
 			return ;
@@ -311,7 +314,6 @@ inode_truncate_blocks(struct inode *ino, uint32_t newsize)
 		if (!ino->i_indirect) {
 			return;
 		}
-
 		free_block(ino->i_indirect);
 		ino->i_indirect = 0;
 	}
@@ -322,10 +324,8 @@ inode_truncate_blocks(struct inode *ino, uint32_t newsize)
 		}
 		pdiskbno = diskaddr(ino->i_double);
 		for (bno = 0; bno < N_INDIRECT; bno++) {
-			if (pdiskbno[bno]) {
-				free_block(pdiskbno[bno]);
-				pdiskbno[bno] = 0;
-			}
+			free_block(pdiskbno[bno]);
+			pdiskbno[bno] = 0;
 		}
 		free_block(ino->i_double);
 		ino->i_double = 0;
@@ -335,9 +335,40 @@ inode_truncate_blocks(struct inode *ino, uint32_t newsize)
 	pdiskbno = diskaddr(ino->i_double);
 	new_nblocks -= N_DIRECT + N_INDIRECT;
 	for (bno = new_nblocks / N_INDIRECT + 1; bno < N_INDIRECT; bno++) {
-		if (pdiskbno[bno]) {
-			free_block(pdiskbno[bno]);
-			pdiskbno[bno] = 0;
+		free_block(pdiskbno[bno]);
+		pdiskbno[bno] = 0;
+	}
+	*/
+
+	// Solution 2: from back to front
+	for (bno = old_nblocks - 1; bno >= new_nblocks; bno--) {
+		// free block
+		if ((r = inode_free_block(ino, bno)) < 0) {
+			return;
+		}
+
+		// free double-indirect block
+		if (bno >= N_DIRECT + N_INDIRECT) {
+			double_indirect_bno = bno - N_DIRECT - N_INDIRECT;
+			// if the double-indirect block doesn't exist
+			// or the current block isn't the first block pointed by the indirect block
+			if (!ino->i_double || double_indirect_bno % N_INDIRECT) {
+				continue;
+			}
+
+			pdiskbno = diskaddr(ino->i_double);
+			free_block(pdiskbno[double_indirect_bno / N_INDIRECT]);
+			pdiskbno[double_indirect_bno / N_INDIRECT] = 0;
+
+			// if the current block is the first block pointed by the double-indirect block
+			if (double_indirect_bno == 0) {
+				free_block(ino->i_double);
+				ino->i_double = 0;
+			}
+		} else if (bno == N_DIRECT && ino->i_indirect) {
+			// free indirect block
+			free_block(ino->i_indirect);
+			ino->i_indirect = 0;
 		}
 	}
 }
